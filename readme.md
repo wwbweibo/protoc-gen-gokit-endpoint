@@ -5,7 +5,7 @@ protoc plugin used to generate go-kit grpc code
 安装
 
 ```bash
-go install github.com/wwbweibo/protoc-gen-gokit-endpoint
+go install github.com/wwbweibo/protoc-gen-gokit-endpoint/cmd/protoc-gen-gokit-endpoint@latest
 ```
 
 usage:

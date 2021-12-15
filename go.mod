@@ -1,4 +1,4 @@
-module github.com/wwbweibo/protoc-gokit-endpoint
+module github.com/wwbweibo/protoc-gen-gokit-endpoint
 
 go 1.17
 
