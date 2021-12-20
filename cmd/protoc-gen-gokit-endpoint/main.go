@@ -83,7 +83,8 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	file.P(fmt.Sprintf("type %s struct {", service.GoName))
 	file.P(fmt.Sprintf("\tUnimplemented%sServer", service.GoName))
 	file.P(fmt.Sprintf("\tservice %sServer", service.GoName))
-
+	file.P("\toptions []func(string) grpc.ServerOption")
+	file.P("\tmiddlewares []func(endpoint.Endpoint) endpoint.Endpoint")
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
@@ -95,14 +96,47 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	file.P(fmt.Sprintf("func New%s(s %sServer) *%s {", service.GoName, service.GoName, service.GoName))
 	file.P(fmt.Sprintf("\treturn &%s{", service.GoName))
 	file.P("\t\tservice: s,")
+	//for _, method := range service.Methods {
+	//    if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
+	//        continue
+	//    }
+	//    file.P(fmt.Sprintf("\t\t%sHandler: Make%sHandler(s),", method.GoName, method.GoName))
+	//}
+	file.P("\t}")
+	file.P("}")
+
+	// generate WithOptions method
+	file.P(fmt.Sprintf("func (s *%s) WithOptions(options ...func(string) grpc.ServerOption) {", service.GoName))
+	file.P("\ts.options = options")
+	file.P("}")
+
+	// generate WithMiddlewares method
+	file.P(fmt.Sprintf("func (s *%s) WithMiddlewares(middlewares ...func(endpoint.Endpoint) endpoint.Endpoint) {", service.GoName))
+	file.P("\ts.middlewares = middlewares")
+	file.P("}")
+
+	// generate Build  method
+	file.P(fmt.Sprintf("func (s *%s) Build() {", service.GoName))
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
 		}
-		file.P(fmt.Sprintf("\t\t%sHandler: Make%sHandler(s),", method.GoName, method.GoName))
+		file.P(fmt.Sprintf("\t%sEndpoint := make%sEndpoint(s.service)", method.GoName, method.GoName))
+		file.P(fmt.Sprintf("\tfor _, middleware := range s.middlewares {"))
+		file.P(fmt.Sprintf("\t\t%sEndpoint = middleware(%sEndpoint)", method.GoName, method.GoName))
+		file.P("\t}")
+
+		file.P("\tvar ops []grpc.ServerOption")
+		file.P("\tfor _, option := range s.options {")
+		file.P(fmt.Sprintf("\t\tops = append(ops, option(\"%s\"))", method.GoName))
+		file.P("\t}")
+		file.P(fmt.Sprintf("\ts.%sHandler = grpc.NewServer(%sEndpoint, decode%sRequest, encode%sResponse, ops...)",
+			method.GoName,
+			method.GoName,
+			method.GoName,
+			method.GoName))
+		file.P("}")
 	}
-	file.P("\t}")
-	file.P("}")
 
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
