@@ -94,6 +94,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 
 	file.P(fmt.Sprintf("func New%s(s %sServer) *%s {", service.GoName, service.GoName, service.GoName))
 	file.P(fmt.Sprintf("\treturn &%s{", service.GoName))
+	file.P("\t\tservice: s,")
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
