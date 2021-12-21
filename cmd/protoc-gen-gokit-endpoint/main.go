@@ -117,6 +117,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 
 	// generate Build  method
 	file.P(fmt.Sprintf("func (s *%s) Build() {", service.GoName))
+	file.P("\tvar ops []grpc.ServerOption")
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
@@ -126,7 +127,6 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 		file.P(fmt.Sprintf("\t\t%sEndpoint = middleware(%sEndpoint)", method.GoName, method.GoName))
 		file.P("\t}")
 
-		file.P("\tvar ops []grpc.ServerOption")
 		file.P("\tfor _, option := range s.options {")
 		file.P(fmt.Sprintf("\t\tops = append(ops, option(\"%s\"))", method.GoName))
 		file.P("\t}")
@@ -135,6 +135,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 			method.GoName,
 			method.GoName,
 			method.GoName))
+		file.P("\t\tops = nil")
 	}
 	file.P("}")
 
