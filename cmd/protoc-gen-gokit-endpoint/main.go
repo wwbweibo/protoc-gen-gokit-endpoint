@@ -135,8 +135,8 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 			method.GoName,
 			method.GoName,
 			method.GoName))
-		file.P("}")
 	}
+	file.P("}")
 
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
