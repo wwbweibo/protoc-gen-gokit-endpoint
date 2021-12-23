@@ -46,6 +46,7 @@ func writeImport(file *protogen.GeneratedFile) {
 	file.P("\tcontext \"context\"")
 	file.P("\tendpoint \"github.com/go-kit/kit/endpoint\"")
 	file.P("\tgrpc \"github.com/go-kit/kit/transport/grpc\"")
+	file.P("\tlog \"github.com/go-kit/kit/log\"")
 	file.P("\tstdopentracing \"github.com/opentracing/opentracing-go\"\n")
 	file.P("\topentracing \"github.com/go-kit/kit/tracing/opentracing\"\n")
 	file.P(")")
@@ -94,6 +95,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	file.P("\toptions []func(string) grpc.ServerOption")
 	file.P("\tmiddlewares []func(endpoint.Endpoint) endpoint.Endpoint")
 	file.P("\ttracer stdopentracing.Tracer")
+	file.P("\tlogger log.Logger")
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
@@ -102,15 +104,10 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	}
 	file.P("}")
 
-	file.P(fmt.Sprintf("func New%s(s %sServer) *%s {", service.GoName, service.GoName, service.GoName))
+	file.P(fmt.Sprintf("func New%s(s %sServer, logger log.Logger) *%s {", service.GoName, service.GoName, service.GoName))
 	file.P(fmt.Sprintf("\treturn &%s{", service.GoName))
 	file.P("\t\tservice: s,")
-	// for _, method := range service.Methods {
-	//    if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
-	//        continue
-	//    }
-	//    file.P(fmt.Sprintf("\t\t%sHandler: Make%sHandler(s),", method.GoName, method.GoName))
-	// }
+	file.P("\t\tlogger: logger,")
 	file.P("\t}")
 	file.P("}")
 
@@ -158,17 +155,18 @@ func generateBuild(file *protogen.GeneratedFile, service *protogen.Service) {
 func generateBuildMethod(file *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method) {
 	file.P(fmt.Sprintf("func (s *%s) build%s() {", service.GoName, method.GoName))
 	file.P(fmt.Sprintf("\t%sEndpoint := make%sEndpoint(s.service)", method.GoName, method.GoName))
+	file.P("\tvar ops []grpc.ServerOption")
 	file.P("\tif s.tracer != nil {")
-	file.P(fmt.Sprintf("\t%sEndpoint = opentracing.TraceServer(s.tracer, \"%s\")(%sEndpoint)",
+	file.P(fmt.Sprintf("\t\t%sEndpoint = opentracing.TraceServer(s.tracer, \"%s\")(%sEndpoint)",
 		method.GoName,
 		method.Desc.FullName(),
 		method.GoName))
+	file.P(fmt.Sprintf("\t\tops = append(ops, grpc.ServerBefore(opentracing.GRPCToContext(s.tracer, \"%s\", s.logger)))", method.Desc.FullName()))
 	file.P("}")
 	file.P(fmt.Sprintf("\tfor _, middleware := range s.middlewares {"))
 	file.P(fmt.Sprintf("\t\t%sEndpoint = middleware(%sEndpoint)", method.GoName, method.GoName))
 	file.P("\t}")
 
-	file.P("\tvar ops []grpc.ServerOption")
 	file.P("\tfor _, option := range s.options {")
 	file.P(fmt.Sprintf("\t\tops = append(ops, option(\"%s\"))", method.Desc.FullName()))
 	file.P("\t}")
