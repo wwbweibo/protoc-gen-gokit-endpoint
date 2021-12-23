@@ -32,15 +32,23 @@ func generate(plugin *protogen.Plugin, file *protogen.File) *protogen.GeneratedF
 	g.P("package ", file.GoPackageName)
 	g.P()
 
+	writeImport(g)
+
 	for _, service := range file.Services {
 		generateForService(g, service)
 		generateServer(g, service)
 	}
-
-	g.QualifiedGoIdent(protogen.GoIdent{GoImportPath: "context"})
-	g.QualifiedGoIdent(protogen.GoIdent{GoImportPath: "github.com/go-kit/kit/endpoint"})
-	g.QualifiedGoIdent(protogen.GoIdent{GoImportPath: "github.com/go-kit/kit/transport/grpc"})
 	return g
+}
+
+func writeImport(file *protogen.GeneratedFile) {
+	file.P("import (")
+	file.P("\tcontext \"context\"")
+	file.P("\tendpoint \"github.com/go-kit/kit/endpoint\"")
+	file.P("\tgrpc \"github.com/go-kit/kit/transport/grpc\"")
+	file.P("\tstdopentracing \"github.com/opentracing/opentracing-go\"\n")
+	file.P("\topentracing \"github.com/go-kit/kit/tracing/opentracing\"\n")
+	file.P(")")
 }
 
 func generateForService(file *protogen.GeneratedFile, service *protogen.Service) {
@@ -85,6 +93,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	file.P(fmt.Sprintf("\tservice %sServer", service.GoName))
 	file.P("\toptions []func(string) grpc.ServerOption")
 	file.P("\tmiddlewares []func(endpoint.Endpoint) endpoint.Endpoint")
+	file.P("\ttracer stdopentracing.Tracer")
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
@@ -96,47 +105,26 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	file.P(fmt.Sprintf("func New%s(s %sServer) *%s {", service.GoName, service.GoName, service.GoName))
 	file.P(fmt.Sprintf("\treturn &%s{", service.GoName))
 	file.P("\t\tservice: s,")
-	//for _, method := range service.Methods {
+	// for _, method := range service.Methods {
 	//    if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 	//        continue
 	//    }
 	//    file.P(fmt.Sprintf("\t\t%sHandler: Make%sHandler(s),", method.GoName, method.GoName))
-	//}
+	// }
 	file.P("\t}")
 	file.P("}")
 
-	// generate WithOptions method
-	file.P(fmt.Sprintf("func (s *%s) WithOptions(options ...func(string) grpc.ServerOption) {", service.GoName))
-	file.P("\ts.options = options")
-	file.P("}")
+	generateWithOptions(file, service)
+	generateWithMiddlewares(file, service)
+	generateWithTracing(file, service)
+	generateBuild(file, service)
 
-	// generate WithMiddlewares method
-	file.P(fmt.Sprintf("func (s *%s) WithMiddlewares(middlewares ...func(endpoint.Endpoint) endpoint.Endpoint) {", service.GoName))
-	file.P("\ts.middlewares = middlewares")
-	file.P("}")
-
-	// generate Build  method
-	file.P(fmt.Sprintf("func (s *%s) Build() {", service.GoName))
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
 		}
-		file.P(fmt.Sprintf("\t%sEndpoint := make%sEndpoint(s.service)", method.GoName, method.GoName))
-		file.P(fmt.Sprintf("\tfor _, middleware := range s.middlewares {"))
-		file.P(fmt.Sprintf("\t\t%sEndpoint = middleware(%sEndpoint)", method.GoName, method.GoName))
-		file.P("\t}")
-
-		file.P("\tvar ops []grpc.ServerOption")
-		file.P("\tfor _, option := range s.options {")
-		file.P(fmt.Sprintf("\t\tops = append(ops, option(\"%s\"))", method.GoName))
-		file.P("\t}")
-		file.P(fmt.Sprintf("\ts.%sHandler = grpc.NewServer(%sEndpoint, decode%sRequest, encode%sResponse, ops...)",
-			method.GoName,
-			method.GoName,
-			method.GoName,
-			method.GoName))
+		generateBuildMethod(file, service, method)
 	}
-	file.P("}")
 
 	for _, method := range service.Methods {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
@@ -149,14 +137,71 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 		file.P("\t}")
 		file.P(fmt.Sprintf("\treturn response.(*%s), nil", method.Output.GoIdent.GoName))
 		file.P("}")
-		//generateGokitEndpoint(file, service, method)
-		//generateEncoderDecoder(file, service, method)
-		//generateHandler(file, service, method)
+		// generateGokitEndpoint(file, service, method)
+		// generateEncoderDecoder(file, service, method)
+		// generateHandler(file, service, method)
 	}
 }
 
+func generateBuild(file *protogen.GeneratedFile, service *protogen.Service) {
+	// generate Build  method
+	file.P(fmt.Sprintf("func (s *%s) Build() {", service.GoName))
+	for _, method := range service.Methods {
+		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
+			continue
+		}
+		file.P(fmt.Sprintf("\ts.build%s()", method.GoName))
+	}
+	file.P("}")
+}
+
+func generateBuildMethod(file *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method) {
+	file.P(fmt.Sprintf("func (s *%s) build%s() {", service.GoName, method.GoName))
+	file.P(fmt.Sprintf("\t%sEndpoint := make%sEndpoint(s.service)", method.GoName, method.GoName))
+	file.P("\tif s.tracer != nil {")
+	file.P(fmt.Sprintf("\t%sEndpoint = opentracing.TraceServer(s.tracer, \"%s\")(%sEndpoint)",
+		method.GoName,
+		method.Desc.FullName(),
+		method.GoName))
+	file.P("}")
+	file.P(fmt.Sprintf("\tfor _, middleware := range s.middlewares {"))
+	file.P(fmt.Sprintf("\t\t%sEndpoint = middleware(%sEndpoint)", method.GoName, method.GoName))
+	file.P("\t}")
+
+	file.P("\tvar ops []grpc.ServerOption")
+	file.P("\tfor _, option := range s.options {")
+	file.P(fmt.Sprintf("\t\tops = append(ops, option(\"%s\"))", method.Desc.FullName()))
+	file.P("\t}")
+	file.P(fmt.Sprintf("\ts.%sHandler = grpc.NewServer(%sEndpoint, decode%sRequest, encode%sResponse, ops...)",
+		method.GoName,
+		method.GoName,
+		method.GoName,
+		method.GoName))
+	file.P("}")
+}
+
+func generateWithOptions(file *protogen.GeneratedFile, service *protogen.Service) {
+	// generate WithOptions method
+	file.P(fmt.Sprintf("func (s *%s) WithOptions(options ...func(string) grpc.ServerOption) {", service.GoName))
+	file.P("\ts.options = options")
+	file.P("}")
+}
+
+func generateWithMiddlewares(file *protogen.GeneratedFile, service *protogen.Service) {
+	// generate WithMiddlewares method
+	file.P(fmt.Sprintf("func (s *%s) WithMiddlewares(middlewares ...func(endpoint.Endpoint) endpoint.Endpoint) {", service.GoName))
+	file.P("\ts.middlewares = middlewares")
+	file.P("}")
+}
+
+func generateWithTracing(file *protogen.GeneratedFile, service *protogen.Service) {
+	file.P(fmt.Sprintf("func (s *%s) WithTracing(tracer stdopentracing.Tracer) {", service.GoName))
+	file.P("\ts.tracer = tracer")
+	file.P("}")
+}
+
 //
-//func generateController(file *protogen.GeneratedFile, service *protogen.Service) {
+// func generateController(file *protogen.GeneratedFile, service *protogen.Service) {
 //    file.P(fmt.Sprintf("type %sController struct {", service.GoName))
 //    file.P(fmt.Sprintf("\tserver %sServer", service.GoName))
 //    // writing GetControllerType function
@@ -177,10 +222,10 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 //    if *enableRpc {
 //        generateRpcClient(file, service)
 //    }
-//}
+// }
 //
-//// generateMethodTags  will accept the method and generate the tags for the method
-//func getMethodTag(method *protogen.Method) string {
+// // generateMethodTags  will accept the method and generate the tags for the method
+// func getMethodTag(method *protogen.Method) string {
 //    value := proto.GetExtension(method.Desc.Options(), annotations.E_Http)
 //    rule := value.(*annotations.HttpRule)
 //    if rule != nil {
@@ -189,9 +234,9 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 //        return fmt.Sprintf("method:\"%s\" route:\"%s\" param:\"input\"", method, path)
 //    }
 //    return fmt.Sprintf("method:\"GET\"")
-//}
+// }
 //
-//func resolveHttpMethod(rule *annotations.HttpRule) (string, string) {
+// func resolveHttpMethod(rule *annotations.HttpRule) (string, string) {
 //    var path string
 //    var method string
 //    switch pattern := rule.Pattern.(type) {
@@ -215,19 +260,19 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 //        method = pattern.Custom.Kind
 //    }
 //    return path, method
-//}
+// }
 //
-//func generateConstructor(file *protogen.GeneratedFile, service *protogen.Service) {
+// func generateConstructor(file *protogen.GeneratedFile, service *protogen.Service) {
 //    file.P(fmt.Sprintf("func New%sController(server %sServer) *%sController {",
 //        service.GoName,
 //        service.GoName,
 //        service.GoName))
 //    file.P(fmt.Sprintf("    return &%sController{server: server}", service.GoName))
 //    file.P("}")
-//}
+// }
 //
-//func generateInterfaceImplement(file *protogen.GeneratedFile, service *protogen.Service) {
+// func generateInterfaceImplement(file *protogen.GeneratedFile, service *protogen.Service) {
 //    file.P(fmt.Sprintf("func (c *%sController) GetControllerType() reflect.Type {", service.GoName))
 //    file.P(fmt.Sprintf("    return reflect.TypeOf(*c)"))
 //    file.P("}")
-//}
+// }
