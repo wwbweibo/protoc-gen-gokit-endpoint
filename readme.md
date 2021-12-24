@@ -18,9 +18,12 @@ in your code
 // here is your biz logic
 packageService := usecase.PackageService{}
 // this is the generated grpc server, you need pass your service into it
-packageServer := v1.NewPackageService(packageService)
+// logger is required
+packageServer := v1.NewPackageService(packageService, logger)
 
 // here to enable server options
+// NOTE: this is just a simple, the option for tracing is no more need in future version, 
+// Build method will do this then WithTracer method is called
 trancingOption := func(name string) grpctransport.ServerOption {
     return grpctransport.ServerBefore(opentracing.GRPCToContext(tracer, name, logger))
 }
@@ -50,3 +53,33 @@ grpcServer.Serve(listener)
 
 - about the options
   - current the option is simple wrap for the grpc.ServerOption
+
+## tracing 
+
+the generator will generate a method called `WithTracer`, it will help you to set the tracer for your server(current is only for opentracing).
+To enable tracing, you need to pass the tracer to the `WithTracer` method, and then call the `Build` method.
+
+here is the example code
+```go
+// newTracer will return a new tracer and it's reporter
+func newTracer() stdopentracing.Tracer, reporter.Repoter {
+    reporter := zipkinhttp.NewReporter("http://localhost:9411/api/v2/spans")
+    endpoint, _ := zipkin.NewEndpoint("hello", "localhost:8081")
+    zipkinTracer, err := zipkin.NewTracer(reporter, zipkin.WithLocalEndpoint(endpoint))
+    if err != nil {
+		panic(err)
+    }
+    tracer := zipkinot.Wrap(zipkinTracer)
+    return tracer, reporter
+}
+
+func func main() {
+    // your code here 
+    server := v1.NewHelloServer(helloService, logger)
+    tracer, reporter := newTracer()
+    defer reporter.Close()
+    server.WithTracing(tracer)
+    server.Build()
+    // your other code
+}
+```
