@@ -1,14 +1,23 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
+var withClient *bool
+var withServer *bool
+
 // main is the entry point for the application.
 func main() {
-	protogen.Options{}.Run(func(gen *protogen.Plugin) error {
+	var flags flag.FlagSet
+	withServer = flags.Bool("server", true, "enable server generation, default is true")
+	withClient = flags.Bool("client", false, "enable client generation, default is false")
+	protogen.Options{
+		ParamFunc: flags.Set,
+	}.Run(func(gen *protogen.Plugin) error {
 		gen.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 		for _, f := range gen.Files {
 			if !f.Generate {
@@ -35,10 +44,14 @@ func generate(plugin *protogen.Plugin, file *protogen.File) *protogen.GeneratedF
 	writeImport(g)
 
 	for _, service := range file.Services {
-		generateForService(g, service)
-		generateServer(g, service)
+		if *withServer {
+			generateForService(g, service)
+			generateServer(g, service)
+		}
+		if *withClient {
+			generateClient(g, service)
+		}
 	}
-
 	return g
 }
 
@@ -46,10 +59,13 @@ func writeImport(file *protogen.GeneratedFile) {
 	file.P("import (")
 	file.P("\tcontext \"context\"")
 	file.P("\tendpoint \"github.com/go-kit/kit/endpoint\"")
-	file.P("\tgrpc \"github.com/go-kit/kit/transport/grpc\"")
+	file.P("\tgrpctransport \"github.com/go-kit/kit/transport/grpc\"")
 	file.P("\tlog \"github.com/go-kit/kit/log\"")
 	file.P("\tstdopentracing \"github.com/opentracing/opentracing-go\"\n")
 	file.P("\topentracing \"github.com/go-kit/kit/tracing/opentracing\"\n")
+	if *withClient {
+		file.P("\tgrpc \"google.golang.org/grpc\"")
+	}
 	file.P(")")
 }
 
@@ -84,8 +100,8 @@ func generateEncoderDecoder(file *protogen.GeneratedFile, service *protogen.Serv
 }
 
 func generateHandler(file *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method) {
-	file.P(fmt.Sprintf("func Make%sHandler(s %sServer) *grpc.Server {", method.GoName, service.GoName))
-	file.P(fmt.Sprintf("\treturn grpc.NewServer(make%sEndpoint(s), decode%sRequest, encode%sResponse )", method.GoName, method.GoName, method.GoName))
+	file.P(fmt.Sprintf("func Make%sHandler(s %sServer) *grpctransport.Server {", method.GoName, service.GoName))
+	file.P(fmt.Sprintf("\treturn grpctransport.NewServer(make%sEndpoint(s), decode%sRequest, encode%sResponse )", method.GoName, method.GoName, method.GoName))
 	file.P("}")
 }
 
@@ -93,7 +109,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 	file.P(fmt.Sprintf("type %s struct {", service.GoName))
 	file.P(fmt.Sprintf("\tUnimplemented%sServer", service.GoName))
 	file.P(fmt.Sprintf("\tservice %sServer", service.GoName))
-	file.P("\toptions []func(string) grpc.ServerOption")
+	file.P("\toptions []func(string) grpctransport.ServerOption")
 	file.P("\tmiddlewares []func(endpoint.Endpoint) endpoint.Endpoint")
 	file.P("\ttracer stdopentracing.Tracer")
 	file.P("\tlogger log.Logger")
@@ -101,7 +117,7 @@ func generateServer(file *protogen.GeneratedFile, service *protogen.Service) {
 		if method.Desc.IsStreamingServer() || method.Desc.IsStreamingClient() {
 			continue
 		}
-		file.P(fmt.Sprintf("\t\t%sHandler grpc.Handler", method.GoName))
+		file.P(fmt.Sprintf("\t\t%sHandler grpctransport.Handler", method.GoName))
 	}
 	file.P("}")
 
@@ -156,13 +172,13 @@ func generateBuild(file *protogen.GeneratedFile, service *protogen.Service) {
 func generateBuildMethod(file *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method) {
 	file.P(fmt.Sprintf("func (s *%s) build%s() {", service.GoName, method.GoName))
 	file.P(fmt.Sprintf("\t%sEndpoint := make%sEndpoint(s.service)", method.GoName, method.GoName))
-	file.P("\tvar ops []grpc.ServerOption")
+	file.P("\tvar ops []grpctransport.ServerOption")
 	file.P("\tif s.tracer != nil {")
 	file.P(fmt.Sprintf("\t\t%sEndpoint = opentracing.TraceServer(s.tracer, \"%s\")(%sEndpoint)",
 		method.GoName,
 		method.Desc.FullName(),
 		method.GoName))
-	file.P(fmt.Sprintf("\t\tops = append(ops, grpc.ServerBefore(opentracing.GRPCToContext(s.tracer, \"%s\", s.logger)))", method.Desc.FullName()))
+	file.P(fmt.Sprintf("\t\tops = append(ops, grpctransport.ServerBefore(opentracing.GRPCToContext(s.tracer, \"%s\", s.logger)))", method.Desc.FullName()))
 	file.P("}")
 	file.P(fmt.Sprintf("\tfor _, middleware := range s.middlewares {"))
 	file.P(fmt.Sprintf("\t\t%sEndpoint = middleware(%sEndpoint)", method.GoName, method.GoName))
@@ -171,7 +187,7 @@ func generateBuildMethod(file *protogen.GeneratedFile, service *protogen.Service
 	file.P("\tfor _, option := range s.options {")
 	file.P(fmt.Sprintf("\t\tops = append(ops, option(\"%s\"))", method.Desc.FullName()))
 	file.P("\t}")
-	file.P(fmt.Sprintf("\ts.%sHandler = grpc.NewServer(%sEndpoint, decode%sRequest, encode%sResponse, ops...)",
+	file.P(fmt.Sprintf("\ts.%sHandler = grpctransport.NewServer(%sEndpoint, decode%sRequest, encode%sResponse, ops...)",
 		method.GoName,
 		method.GoName,
 		method.GoName,
@@ -181,7 +197,7 @@ func generateBuildMethod(file *protogen.GeneratedFile, service *protogen.Service
 
 func generateWithOptions(file *protogen.GeneratedFile, service *protogen.Service) {
 	// generate WithOptions method
-	file.P(fmt.Sprintf("func (s *%s) WithOptions(options ...func(string) grpc.ServerOption) {", service.GoName))
+	file.P(fmt.Sprintf("func (s *%s) WithOptions(options ...func(string) grpctransport.ServerOption) {", service.GoName))
 	file.P("\ts.options = options")
 	file.P("}")
 }
@@ -200,7 +216,7 @@ func generateWithTracing(file *protogen.GeneratedFile, service *protogen.Service
 }
 
 //
-//func generateController(file *protogen.GeneratedFile, service *protogen.Service) {
+// func generateController(file *protogen.GeneratedFile, service *protogen.Service) {
 //    file.P(fmt.Sprintf("type %sController struct {", service.GoName))
 //    file.P(fmt.Sprintf("\tserver %sServer", service.GoName))
 //    // writing GetControllerType function
@@ -221,10 +237,10 @@ func generateWithTracing(file *protogen.GeneratedFile, service *protogen.Service
 //    if *enableRpc {
 //        generateRpcClient(file, service)
 //    }
-//}
+// }
 //
-//// generateMethodTags  will accept the method and generate the tags for the method
-//func getMethodTag(method *protogen.Method) string {
+// // generateMethodTags  will accept the method and generate the tags for the method
+// func getMethodTag(method *protogen.Method) string {
 //    value := proto.GetExtension(method.Desc.Options(), annotations.E_Http)
 //    rule := value.(*annotations.HttpRule)
 //    if rule != nil {
@@ -233,9 +249,9 @@ func generateWithTracing(file *protogen.GeneratedFile, service *protogen.Service
 //        return fmt.Sprintf("method:\"%s\" route:\"%s\" param:\"input\"", method, path)
 //    }
 //    return fmt.Sprintf("method:\"GET\"")
-//}
+// }
 //
-//func resolveHttpMethod(rule *annotations.HttpRule) (string, string) {
+// func resolveHttpMethod(rule *annotations.HttpRule) (string, string) {
 //    var path string
 //    var method string
 //    switch pattern := rule.Pattern.(type) {
@@ -259,19 +275,19 @@ func generateWithTracing(file *protogen.GeneratedFile, service *protogen.Service
 //        method = pattern.Custom.Kind
 //    }
 //    return path, method
-//}
+// }
 //
-//func generateConstructor(file *protogen.GeneratedFile, service *protogen.Service) {
+// func generateConstructor(file *protogen.GeneratedFile, service *protogen.Service) {
 //    file.P(fmt.Sprintf("func New%sController(server %sServer) *%sController {",
 //        service.GoName,
 //        service.GoName,
 //        service.GoName))
 //    file.P(fmt.Sprintf("    return &%sController{server: server}", service.GoName))
 //    file.P("}")
-//}
+// }
 //
-//func generateInterfaceImplement(file *protogen.GeneratedFile, service *protogen.Service) {
+// func generateInterfaceImplement(file *protogen.GeneratedFile, service *protogen.Service) {
 //    file.P(fmt.Sprintf("func (c *%sController) GetControllerType() reflect.Type {", service.GoName))
 //    file.P(fmt.Sprintf("    return reflect.TypeOf(*c)"))
 //    file.P("}")
-//}
+// }
