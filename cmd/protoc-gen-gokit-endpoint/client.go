@@ -78,6 +78,9 @@ func generateMethodImpl(file *protogen.GeneratedFile, service *protogen.Service)
 		file.P(fmt.Sprintf("func (client *%sGrpcClient) %s(ctx context.Context, request *%s) (*%s, error) {",
 			service.GoName, method.GoName, method.Input.GoIdent.GoName, method.Output.GoIdent.GoName))
 		file.P(fmt.Sprintf("\tresp, err := client.%sEndpoint(ctx, request)", method.GoName))
+		file.P("\tif err != nil {")
+		file.P("\t\treturn nil, err")
+		file.P("\t}")
 		file.P(fmt.Sprintf("\treturn resp.(*%s), err", method.Output.GoIdent.GoName))
 		file.P("}")
 	}
